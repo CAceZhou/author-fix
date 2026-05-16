@@ -13,7 +13,7 @@
 
   --editor-font-size: 17px;
   --editor-line-height: 1.9;
-  --editor-max-width: 816px;
+  --editor-max-width: 900px;
 }
 
 /* 默认 / 经典暖纸模式 (Warm Classic) */
@@ -790,17 +790,15 @@ body {
 }
 
 .sidebar.collapsed {
-  width: 48px;
+  width: 0;
   box-shadow: none;
-}
-
-.sidebar.collapsed .sidebar-content-pane {
-  display: none;
-}
-
-.sidebar.collapsed .sidebar-nav-pane {
   border-right: none;
-  width: 48px;
+  overflow: hidden;
+}
+
+.sidebar.collapsed .sidebar-content-pane,
+.sidebar.collapsed .sidebar-nav-pane {
+  display: none;
 }
 
 .sidebar.collapsed .sidebar-nav-top,
@@ -836,8 +834,8 @@ body {
 }
 
 .sidebar.push-mode.collapsed {
-  width: 48px;
-  min-width: 48px;
+  width: 0;
+  min-width: 0;
   transform: none;
   border-right: none;
 }
@@ -1549,7 +1547,7 @@ body.resizing .main-content {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 40px 16px 80px;
+  padding: 40px 16px 200px;
   background: var(--bg-canvas) !important;
   transition: margin-right 0.3s ease;
   /* 禁用滚动锚定，防止虚拟分页元素重排时导致原生滚动条跳动 */
@@ -2849,15 +2847,75 @@ body.resizing .main-content {
   }
 
   .sidebar.collapsed {
-    width: 48px;
+    width: 0;
+    border-right: none;
   }
 
   .ai-panel {
     width: 100%;
   }
 
+  .editor-container {
+    padding: 10px 0 200px;
+  }
+
   .document-workspace {
     padding: 0;
+    max-width: 100% !important;
+  }
+
+  /* 移动端工具栏增强 */
+  .editor-toolbar {
+    padding: 6px 4px;
+    gap: 2px;
+  }
+
+  .toolbar-btn {
+    min-width: 38px;
+    height: 38px;
+    padding: 4px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .toolbar-dropdown-btn {
+    padding-left: 8px;
+    padding-right: 4px;
+  }
+
+  /* 移动端弹出层优化：防止超出屏幕且更易操作 */
+  .typeset-popover,
+  .toolbar-dropdown-menu,
+  .color-picker-popover {
+    position: fixed !important;
+    left: 10px !important;
+    right: 10px !important;
+    top: auto !important;
+    bottom: 20px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    transform: none !important;
+    margin: 0 !important;
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.2);
+    border-radius: 16px;
+    z-index: 10001 !important;
+    background: var(--bg-primary) !important;
+    border: 1px solid var(--border-medium) !important;
+  }
+  
+  .typeset-popover::before,
+  .toolbar-dropdown-menu::before,
+  .color-picker-popover::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 32px;
+    height: 4px;
+    background: var(--border-medium);
+    border-radius: 2px;
+    opacity: 0.5;
   }
 }
 
@@ -3628,31 +3686,58 @@ body.resizing .main-content {
 
 .inline-ai-popover {
   position: fixed;
-  width: 360px;
-  max-width: calc(100vw - 32px);
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15), 0 2px 8px rgba(0, 0, 0, 0.08);
-  z-index: 200;
-  padding: 10px;
+  bottom: 32px; /* 位于状态栏上方 */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 900px; /* 与编辑器最大宽度对齐 */
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--border-medium);
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.1);
+  z-index: 150;
+  padding: 16px 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  backdrop-filter: blur(12px);
-  animation: popoverIn 0.15s ease-out;
+  gap: 12px;
+  backdrop-filter: blur(20px);
+  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-@keyframes popoverIn {
+@keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(8px) scale(0.97);
+    transform: translate(-50%, 20px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translate(-50%, 0);
   }
+}
+
+/* 适配不同主题的边框与阴影 */
+[data-theme='dark'] .inline-ai-popover {
+  background: rgba(30, 30, 30, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.4);
+}
+
+@media (max-width: 768px) {
+  .inline-ai-popover {
+    bottom: 31px;
+    left: 0;
+    transform: none;
+    max-width: 100%;
+    border-radius: 12px 12px 0 0;
+    padding: 12px 16px;
+  }
+}
+
+.inline-ai-popover-chat {
+  height: 500px;
+  max-height: 70vh;
 }
 
 .inline-ai-modes {
@@ -8883,6 +8968,17 @@ h5.chat-md-heading {
 
 .bubble-btn:hover::after {
   background: rgba(0, 0, 0, 0.06);
+}
+
+@media (max-width: 768px) {
+  .bubble-menu {
+    padding: 6px 10px;
+    gap: 4px;
+  }
+  .bubble-btn {
+    width: 40px;
+    height: 40px;
+  }
 }
 
 .bubble-btn.active {

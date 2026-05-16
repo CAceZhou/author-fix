@@ -6,6 +6,7 @@ import { useAppStore } from './store/useAppStore';
 import { useI18n } from './lib/useI18n';
 import { Menu, Sparkles, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import Tooltip from './components/ui/Tooltip';
+import IconButton from './components/ui/IconButton';
 import {
   getChapters,
   createChapter,
@@ -520,6 +521,12 @@ export default function Home() {
       {/* ===== 顶栏（Google Docs 风格，全宽，只含 Logo）===== */}
       <header className="top-header-bar">
         <div className="top-header-left">
+          <IconButton
+            icon={sidebarOpen ? <PanelLeftClose size={18} /> : <Menu size={18} />}
+            label={sidebarOpen ? t('sidebar.hideSidebar') : t('sidebar.showSidebar')}
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="sidebar-toggle-btn"
+          />
           <div className="top-header-logo">
             <span>A</span>uthor
           </div>

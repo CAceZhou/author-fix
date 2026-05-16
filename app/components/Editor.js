@@ -84,16 +84,26 @@ const Editor = forwardRef(function Editor({ content, chapterId, onUpdate, editab
         if (typeof window !== 'undefined') {
             try {
                 const saved = JSON.parse(localStorage.getItem('author-margins'));
-                if (saved) return { x: saved.x ?? 96, y: saved.y ?? 96 };
+                if (saved) return { x: saved.x ?? 40, y: saved.y ?? 40 };
             } catch { }
         }
-        return { x: 96, y: 96 };
+        return { x: 40, y: 40 };
     });
 
-    // 边距变更自动保存
+    // 编辑器最大宽度
+    const [maxWidth, setMaxWidth] = useState(() => {
+        if (typeof window !== 'undefined') {
+            const saved = localStorage.getItem('author-max-width');
+            if (saved) return parseInt(saved);
+        }
+        return 816;
+    });
+
+    // 边距与宽度变更自动保存
     useEffect(() => {
         localStorage.setItem('author-margins', JSON.stringify(margins));
-    }, [margins]);
+        localStorage.setItem('author-max-width', String(maxWidth));
+    }, [margins, maxWidth]);
 
     // 斜杠命令扩展
     const slashExtension = useMemo(() => createSlashExtension((range) => {
@@ -400,7 +410,7 @@ const Editor = forwardRef(function Editor({ content, chapterId, onUpdate, editab
 
     return (
         <>
-            <EditorToolbar editor={editor} margins={margins} setMargins={setMargins} />
+            <EditorToolbar editor={editor} margins={margins} setMargins={setMargins} maxWidth={maxWidth} setMaxWidth={setMaxWidth} />
             <div
                 className="editor-container"
                 onMouseDown={(e) => {
@@ -414,7 +424,7 @@ const Editor = forwardRef(function Editor({ content, chapterId, onUpdate, editab
                     }
                 }}
             >
-                <div ref={workspaceRef} className="document-workspace" style={{ minHeight: totalWorkspaceHeight }}>
+                <div ref={workspaceRef} className="document-workspace" style={{ minHeight: totalWorkspaceHeight, maxWidth: maxWidth === 0 ? 'none' : `${maxWidth}px` }}>
 
                     {/* SVG clip definition — 每页一个矩形，文字只在页面内可见 */}
                     <svg width="0" height="0" style={{ position: 'absolute' }}>
@@ -898,12 +908,10 @@ function FindBar({ editor, visible, onClose }) {
 // ==================== Inline AI 组件 ====================
 function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, contextSelection, setContextSelection }) {
     const { setShowSettings, setJumpToNodeId } = useAppStore();
-    const [visible, setVisible] = useState(false);
     const [mode, setMode] = useState('continue');
     const [instruction, setInstruction] = useState('');
     const [streaming, setStreaming] = useState(false);
     const [pendingGhost, setPendingGhost] = useState(false);
-    const [position, setPosition] = useState({ top: 0, left: 0 });
     const abortRef = useRef(null);
     const inputRef = useRef(null);
     const popoverRef = useRef(null);
@@ -924,38 +932,7 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
     const [chatAnswer, setChatAnswer] = useState('');
     const chatPanelRef = useRef(null);
     const chatInputRef = useRef(null);
-
-    // ===== 拖动支持 =====
-    const dragRef = useRef({ dragging: false, startX: 0, startY: 0, origTop: 0, origLeft: 0 });
-    const [dragOffset, setDragOffset] = useState(null); // {top, left} 用户拖动偏移
     const ragLoadingRef = useRef(false); // 追踪 RAG 加载状态（用于 close 守卫）
-
-    const onDragStart = useCallback((e) => {
-        // 只响应左键，忽略按钮/输入框上的点击
-        if (e.button !== 0) return;
-        if (e.target.closest('button') || e.target.closest('input')) return;
-        e.preventDefault();
-        const currentTop = dragOffset ? dragOffset.top : position.top;
-        const currentLeft = dragOffset ? dragOffset.left : position.left;
-        dragRef.current = { dragging: true, startX: e.clientX, startY: e.clientY, origTop: currentTop, origLeft: currentLeft };
-
-        const onMove = (ev) => {
-            if (!dragRef.current.dragging) return;
-            const dx = ev.clientX - dragRef.current.startX;
-            const dy = ev.clientY - dragRef.current.startY;
-            setDragOffset({
-                top: dragRef.current.origTop + dy,
-                left: dragRef.current.origLeft + dx,
-            });
-        };
-        const onUp = () => {
-            dragRef.current.dragging = false;
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-        };
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-    }, [position, dragOffset]);
 
     // 获取选中文本
     const getSelectedText = useCallback(() => {
@@ -972,45 +949,21 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
         return text.length > 1500 ? text.slice(-1500) : text;
     }, [editor]);
 
-    // 计算浮窗位置（基于光标，使用视口坐标 position:fixed）
-    const updatePosition = useCallback(() => {
-        if (!editor) return;
-        const { view } = editor;
-        const head = editor.state.selection.head;
-        const coords = view.coordsAtPos(head, -1);
-
-        const GAP = 16;
-        const popoverW = 360;
-        const popoverH = 130;
-        const vw = window.innerWidth;
-        const vh = window.innerHeight;
-
-        let top = coords.bottom + 8;
-        let left = coords.left;
-        left = Math.max(GAP, Math.min(left, vw - popoverW - GAP));
-        if (top + popoverH > vh - GAP) {
-            top = coords.top - popoverH - 8;
-        }
-        if (top < GAP) top = GAP;
-
-        setPosition({ top, left });
-    }, [editor]);
-
-    // 打开浮窗
-    const open = useCallback(() => {
-        if (pendingGhost) return; // 有待确认的 ghost 时不打开新的
+    // 聚焦输入框并更新模式
+    const focusInput = useCallback(() => {
+        if (pendingGhost) return;
         const selected = getSelectedText();
         setMode(selected ? 'rewrite' : 'continue');
-        setInstruction('');
-        updatePosition();
-        setDragOffset(null); // 重置拖动偏移
-        setVisible(true);
-    }, [getSelectedText, updatePosition, pendingGhost]);
+        if (mode === 'chat') {
+            chatInputRef.current?.focus();
+        } else {
+            inputRef.current?.focus();
+        }
+    }, [getSelectedText, pendingGhost, mode]);
 
-    // 关闭浮窗
-    const close = useCallback(() => {
+    // 取消输入
+    const cancelInput = useCallback(() => {
         if (streaming || pendingGhost || ragLoadingRef.current) return;
-        setVisible(false);
         setInstruction('');
         editor?.chain().focus().run();
     }, [streaming, pendingGhost, editor]);
@@ -1115,7 +1068,6 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
         originalTextRef.current = null;
         originalRangeRef.current = null;
         setPendingGhost(false);
-        setVisible(false);
         editor?.chain().focus().run();
     }, [editor, instruction, onArchiveGeneration]);
 
@@ -1148,7 +1100,6 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
         originalRangeRef.current = null;
         savedDocRef.current = null;
         setPendingGhost(false);
-        setVisible(false);
         editor?.chain().focus().run();
     }, [editor, instruction, onArchiveGeneration]);
 
@@ -1313,26 +1264,32 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
                         }
                     }
                 } catch { /* 回退：不滚动也不阻塞 */ }
-            } else {
-                setVisible(false);
             }
         }
-    }, [onAiRequest, streaming, mode, instruction, getSelectedText, getContextText, editor, enqueueText, updatePosition, generateChat]);
+    }, [onAiRequest, streaming, mode, instruction, getSelectedText, getContextText, editor, enqueueText, generateChat]);
 
-    // 键盘快捷键：Ctrl+J 打开，Esc 关闭/拒绝，Tab 接受
+    // 键盘快捷键：Ctrl+J 聚焦输入，Esc 取消输入/拒绝，Tab 接受
     useEffect(() => {
         const handler = (e) => {
             if ((e.ctrlKey || e.metaKey) && e.key === 'j') {
                 e.preventDefault();
-                if (pendingGhost) return;
-                if (visible) close();
-                else open();
+                focusInput();
             }
-            if (e.key === 'Escape' && (visible || pendingGhost)) {
-                e.preventDefault();
-                if (streaming) stop();
-                else if (pendingGhost) rejectGhost();
-                else close();
+            if (e.key === 'Escape') {
+                if (pendingGhost) {
+                    e.preventDefault();
+                    rejectGhost();
+                } else if (streaming || chatStreaming) {
+                    e.preventDefault();
+                    if (streaming) stop();
+                    if (chatStreaming) {
+                        if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+                        setChatStreaming(false);
+                    }
+                } else if (document.activeElement === inputRef.current || document.activeElement === chatInputRef.current) {
+                    e.preventDefault();
+                    cancelInput();
+                }
             }
             // Tab 接受 ghost text
             if (e.key === 'Tab' && pendingGhost) {
@@ -1340,22 +1297,84 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
                 acceptGhost();
             }
         };
-        document.addEventListener('keydown', handler);
-        return () => document.removeEventListener('keydown', handler);
-    }, [visible, streaming, pendingGhost, open, close, stop, rejectGhost, acceptGhost]);
 
-    // 点击外部关闭（但待确认状态和RAG加载中不自动关闭）
-    useEffect(() => {
-        if (!visible) return;
-        const handler = (e) => {
-            if (popoverRef.current && !popoverRef.current.contains(e.target)) {
-                if (!streaming && !pendingGhost) close();
+        // ===== 针对 iOS 的长按兼容性逻辑 =====
+        let touchTimer = null;
+        let startX = 0;
+        let startY = 0;
+        let isLongPress = false;
+
+        const handleTouchStart = (e) => {
+            if (!e.target.closest('.tiptap') || pendingGhost || streaming) return;
+            const touch = e.touches[0];
+            startX = touch.clientX;
+            startY = touch.clientY;
+            isLongPress = false;
+            
+            if (touchTimer) clearTimeout(touchTimer);
+            touchTimer = setTimeout(() => {
+                touchTimer = null;
+                isLongPress = true;
+                // 震动反馈 (如果支持)
+                if (window.navigator.vibrate) window.navigator.vibrate(15);
+                focusInput();
+            }, 550); // 略短于 iOS 原生菜单触发时间
+        };
+
+        const handleTouchMove = (e) => {
+            if (!touchTimer) return;
+            const touch = e.touches[0];
+            if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) {
+                clearTimeout(touchTimer);
+                touchTimer = null;
             }
         };
-        // 延迟注册，避免同一事件循环中触发关闭
-        const timer = setTimeout(() => document.addEventListener('mousedown', handler), 10);
-        return () => { clearTimeout(timer); document.removeEventListener('mousedown', handler); };
-    }, [visible, streaming, pendingGhost, close]);
+
+        const handleTouchEnd = () => {
+            if (touchTimer) {
+                clearTimeout(touchTimer);
+                touchTimer = null;
+            }
+        };
+
+        const handleContextMenu = (e) => {
+            if (e.target.closest('.tiptap')) {
+                // 如果正在生成或有 ghost，阻止原生菜单
+                if (pendingGhost || streaming) {
+                    e.preventDefault();
+                    return;
+                }
+
+                const hasSelection = !editor.state.selection.empty;
+                const isMobile = window.matchMedia('(max-width: 768px)').matches;
+
+                // 桌面端有选区右键，或移动端长按 (isLongPress 标记)
+                if (hasSelection || isMobile || isLongPress) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    focusInput();
+                    isLongPress = false;
+                }
+            }
+        };
+
+        document.addEventListener('keydown', handler);
+        document.addEventListener('contextmenu', handleContextMenu, { capture: true });
+        document.addEventListener('touchstart', handleTouchStart, { passive: true });
+        document.addEventListener('touchmove', handleTouchMove, { passive: true });
+        document.addEventListener('touchend', handleTouchEnd);
+        document.addEventListener('touchcancel', handleTouchEnd);
+
+        return () => {
+            document.removeEventListener('keydown', handler);
+            document.removeEventListener('contextmenu', handleContextMenu, { capture: true });
+            document.removeEventListener('touchstart', handleTouchStart);
+            document.removeEventListener('touchmove', handleTouchMove);
+            document.removeEventListener('touchend', handleTouchEnd);
+            document.removeEventListener('touchcancel', handleTouchEnd);
+            if (touchTimer) clearTimeout(touchTimer);
+        };
+    }, [streaming, chatStreaming, pendingGhost, focusInput, stop, rejectGhost, acceptGhost, editor, cancelInput]);
 
     // Chat 模式下自动滚到底部
     useEffect(() => {
@@ -1363,11 +1382,6 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
             chatPanelRef.current.scrollTop = chatPanelRef.current.scrollHeight;
         }
     }, [chatMessages, chatAnswer]);
-
-    // 待确认状态时不显示浮窗，改为在幽灵文本末尾显示操作栏
-    if (!visible && !pendingGhost) {
-        return null;
-    }
 
     // 待确认状态：在幽灵文本末尾内联显示操作栏（Cursor 风格）
     if (pendingGhost) {
@@ -1411,13 +1425,9 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
         <div
             ref={popoverRef}
             className={`inline-ai-popover ${mode === 'chat' ? 'inline-ai-popover-chat' : ''}`}
-            style={{
-                top: dragOffset ? dragOffset.top : position.top,
-                left: Math.max(16, dragOffset ? dragOffset.left : position.left),
-            }}
         >
-            {/* 模式选择（同时作为拖动手柄） */}
-            <div className="inline-ai-modes" onMouseDown={onDragStart} style={{ cursor: 'grab' }}>
+            {/* 模式选择 */}
+            <div className="inline-ai-modes">
                 {availableModes.map(m => (
                     <button
                         key={m.key}
@@ -1434,8 +1444,8 @@ function InlineAI({ editor, onAiRequest, onArchiveGeneration, contextItems, cont
             {/* ===== Chat 模式：聊天面板 ===== */}
             {mode === 'chat' ? (
                 <>
-                    {/* 聊天头部（同时作为拖动手柄） */}
-                    <div className="chat-header" onMouseDown={onDragStart} style={{ cursor: 'grab' }}>
+                    {/* 聊天头部 */}
+                    <div className="chat-header">
                         <div className="chat-header-icon">✦</div>
                         <div className="chat-header-text">
                             <span className="chat-header-title">AI 问答助手</span>
@@ -1824,13 +1834,8 @@ const FONT_FAMILIES = [
 const FONT_SIZES = [12, 14, 15, 16, 17, 18, 20, 22, 24, 28, 32];
 
 // ==================== 工具栏 ====================
-function EditorToolbar({ editor, margins, setMargins }) {
-    const [showFontColor, setShowFontColor] = useState(false);
-    const [showBgColor, setShowBgColor] = useState(false);
-    const [showFontFamily, setShowFontFamily] = useState(false);
-    const [showFontSize, setShowFontSize] = useState(false);
-    const [showTypeset, setShowTypeset] = useState(false);
-    const [showMargins, setShowMargins] = useState(false);
+function EditorToolbar({ editor, margins, setMargins, maxWidth, setMaxWidth }) {
+    const [activePopover, setActivePopover] = useState(null); // 'fontColor', 'bgColor', 'fontFamily', 'fontSize', 'typeset', 'margins'
     const [dropPos, setDropPos] = useState({});
     const [fontSize, setFontSize] = useState(() => {
         if (typeof window !== 'undefined') return parseInt(localStorage.getItem('author-font-size')) || 17;
@@ -1848,24 +1853,26 @@ function EditorToolbar({ editor, margins, setMargins }) {
         localStorage.setItem('author-line-height', String(lineHeight));
     }, [fontSize, lineHeight]);
 
-    const closeAll = () => {
-        setShowFontColor(false);
-        setShowBgColor(false);
-        setShowFontFamily(false);
-        setShowFontSize(false);
-        setShowTypeset(false);
-        setShowMargins(false);
-    };
+    const closeAll = useCallback(() => {
+        setActivePopover(null);
+    }, []);
 
     const toolbarRef = useRef(null);
     useEffect(() => {
         const handler = (e) => {
-            if (e.target.closest('.toolbar-dropdown-wrap')) return;
+            if (e.target.closest('.toolbar-dropdown-wrap') || 
+                e.target.closest('.typeset-popover') || 
+                e.target.closest('.color-picker-popover') ||
+                e.target.closest('.toolbar-dropdown-menu')) return;
             closeAll();
         };
-        document.addEventListener('click', handler);
-        return () => document.removeEventListener('click', handler);
-    }, []);
+        document.addEventListener('mousedown', handler);
+        document.addEventListener('touchstart', handler, { passive: true });
+        return () => {
+            document.removeEventListener('mousedown', handler);
+            document.removeEventListener('touchstart', handler);
+        };
+    }, [closeAll]);
 
     // 工具栏横向滚动：将鼠标滚轮纵向滚动转为横向
     useEffect(() => {
@@ -1954,8 +1961,19 @@ function EditorToolbar({ editor, margins, setMargins }) {
         }
     };
 
+    const togglePopover = (e, name, align = 'left') => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activePopover === name) {
+            setActivePopover(null);
+        } else {
+            setDropPos(getDropdownPos(e.currentTarget, align));
+            setActivePopover(name);
+        }
+    };
+
     return (
-        <div className="editor-toolbar" ref={toolbarRef} onMouseDown={e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); }}>
+        <div className="editor-toolbar" ref={toolbarRef}>
             {/* 编辑器 AI 模型切换器 */}
             <ModelPicker target="editor" dropDirection="down" />
 
@@ -1966,19 +1984,23 @@ function EditorToolbar({ editor, margins, setMargins }) {
 
             {/* 一键排版/撤销/重做 */}
             <div className="toolbar-group">
-                <button className="toolbar-btn" onClick={() => editor.chain().focus().undo().run()} title="撤销 (Ctrl+Z)"><Undo2 size={16} strokeWidth={2.5} /></button>
-                <button className="toolbar-btn" onClick={handleAutoFormat} title="一键排版 (去除多余空格与空行)"><Wand2 size={16} strokeWidth={2.5} /></button>
-                <button className="toolbar-btn" onClick={() => editor.chain().focus().redo().run()} title="重做 (Ctrl+Y)"><Redo2 size={16} strokeWidth={2.5} /></button>
+                <button className="toolbar-btn" onClick={() => editor.chain().focus().undo().run()} title="撤销 (Ctrl+Z)"><Undo2 size={16} strokeWidth={2.5} style={{ pointerEvents: 'none' }} /></button>
+                <button className="toolbar-btn" onClick={handleAutoFormat} title="一键排版 (去除多余空格与空行)"><Wand2 size={16} strokeWidth={2.5} style={{ pointerEvents: 'none' }} /></button>
+                <button className="toolbar-btn" onClick={() => editor.chain().focus().redo().run()} title="重做 (Ctrl+Y)"><Redo2 size={16} strokeWidth={2.5} style={{ pointerEvents: 'none' }} /></button>
             </div>
 
             <div className="toolbar-divider" />
 
             {/* 字体族 */}
-            <div className="toolbar-dropdown-wrap" onClick={e => e.stopPropagation()}>
-                <button className="toolbar-btn toolbar-dropdown-btn" onClick={e => { closeAll(); setDropPos(getDropdownPos(e.currentTarget)); setShowFontFamily(!showFontFamily); }} title="字体">
-                    {currentFontLabel} <span className="dropdown-arrow">▾</span>
+            <div className="toolbar-dropdown-wrap">
+                <button 
+                    className={`toolbar-btn toolbar-dropdown-btn ${activePopover === 'fontFamily' ? 'active' : ''}`} 
+                    onPointerUp={e => togglePopover(e, 'fontFamily')}
+                    title="字体"
+                >
+                    <span style={{ pointerEvents: 'none' }}>{currentFontLabel}</span> <span className="dropdown-arrow" style={{ pointerEvents: 'none' }}>▾</span>
                 </button>
-                {showFontFamily && (
+                {activePopover === 'fontFamily' && (
                     <div className="toolbar-dropdown-menu" style={dropPos}>
                         {FONT_FAMILIES.map(f => (
                             <button
@@ -1992,7 +2014,7 @@ function EditorToolbar({ editor, margins, setMargins }) {
                                     } else {
                                         editor.chain().focus().unsetFontFamily().run();
                                     }
-                                    setShowFontFamily(false);
+                                    setActivePopover(null);
                                 }}
                             >
                                 {f.label}
@@ -2013,23 +2035,23 @@ function EditorToolbar({ editor, margins, setMargins }) {
                 <button className={`toolbar-btn ${editor.isActive('superscript') ? 'active' : ''}`} onClick={() => editor.chain().focus().toggleSuperscript().run()} title="上标" style={{ fontSize: 11 }}>X²</button>
                 <button className={`toolbar-btn ${editor.isActive('subscript') ? 'active' : ''}`} onClick={() => editor.chain().focus().toggleSubscript().run()} title="下标" style={{ fontSize: 11 }}>X₂</button>
                 <button className={`toolbar-btn ${editor.isActive('remark') ? 'active' : ''}`} onClick={() => promptForRemark(editor)} title="备注 / 批注">
-                    <MessageSquareText size={16} />
+                    <MessageSquareText size={16} style={{ pointerEvents: 'none' }} />
                 </button>
             </div>
 
             <div className="toolbar-divider" />
 
             {/* 字体颜色 */}
-            <div className="toolbar-dropdown-wrap" onClick={e => e.stopPropagation()}>
+            <div className="toolbar-dropdown-wrap">
                 <button
-                    className="toolbar-btn toolbar-color-btn"
-                    onClick={e => { closeAll(); setDropPos(getDropdownPos(e.currentTarget, 'center')); setShowFontColor(!showFontColor); }}
+                    className={`toolbar-btn toolbar-color-btn ${activePopover === 'fontColor' ? 'active' : ''}`}
+                    onPointerUp={e => togglePopover(e, 'fontColor', 'center')}
                     title="字体颜色"
                 >
-                    <span style={{ borderBottom: `3px solid ${currentColor || 'var(--text-primary)'}` }}>A</span>
-                    <span className="dropdown-arrow">▾</span>
+                    <span style={{ borderBottom: `3px solid ${currentColor || 'var(--text-primary)'}`, pointerEvents: 'none' }}>A</span>
+                    <span className="dropdown-arrow" style={{ pointerEvents: 'none' }}>▾</span>
                 </button>
-                {showFontColor && (
+                {activePopover === 'fontColor' && (
                     <ColorPicker
                         label="字体颜色"
                         currentColor={currentColor}
@@ -2037,17 +2059,17 @@ function EditorToolbar({ editor, margins, setMargins }) {
                             if (color) editor.chain().focus().setColor(color).run();
                             else editor.chain().focus().unsetColor().run();
                         }}
-                        onClose={() => setShowFontColor(false)}
+                        onClose={() => setActivePopover(null)}
                         style={dropPos}
                     />
                 )}
             </div>
 
             {/* 背景色/高亮 */}
-            <div className="toolbar-dropdown-wrap" onClick={e => e.stopPropagation()}>
+            <div className="toolbar-dropdown-wrap">
                 <button
-                    className="toolbar-btn toolbar-color-btn"
-                    onClick={e => { closeAll(); setDropPos(getDropdownPos(e.currentTarget, 'center')); setShowBgColor(!showBgColor); }}
+                    className={`toolbar-btn toolbar-color-btn ${activePopover === 'bgColor' ? 'active' : ''}`}
+                    onPointerUp={e => togglePopover(e, 'bgColor', 'center')}
                     title="背景颜色（高亮）"
                 >
                     <span style={{
@@ -2055,10 +2077,11 @@ function EditorToolbar({ editor, margins, setMargins }) {
                         padding: '0 3px',
                         borderRadius: 2,
                         color: currentHighlight ? '#fff' : 'inherit',
+                        pointerEvents: 'none'
                     }}>高亮</span>
-                    <span className="dropdown-arrow">▾</span>
+                    <span className="dropdown-arrow" style={{ pointerEvents: 'none' }}>▾</span>
                 </button>
-                {showBgColor && (
+                {activePopover === 'bgColor' && (
                     <ColorPicker
                         label="背景颜色"
                         currentColor={currentHighlight}
@@ -2066,7 +2089,7 @@ function EditorToolbar({ editor, margins, setMargins }) {
                             if (color) editor.chain().focus().toggleHighlight({ color }).run();
                             else editor.chain().focus().unsetHighlight().run();
                         }}
-                        onClose={() => setShowBgColor(false)}
+                        onClose={() => setActivePopover(null)}
                         style={dropPos}
                     />
                 )}
@@ -2094,16 +2117,16 @@ function EditorToolbar({ editor, margins, setMargins }) {
             <div className="toolbar-divider" />
 
             {/* 字号行距 */}
-            <div className="toolbar-dropdown-wrap" onClick={e => e.stopPropagation()}>
+            <div className="toolbar-dropdown-wrap">
                 <button
-                    className={`toolbar-btn ${showTypeset ? 'active' : ''}`}
-                    onClick={e => { closeAll(); setDropPos(getDropdownPos(e.currentTarget, 'right')); setShowTypeset(!showTypeset); }}
+                    className={`toolbar-btn ${activePopover === 'typeset' ? 'active' : ''}`}
+                    onPointerUp={e => togglePopover(e, 'typeset', 'right')}
                     title="字号与行距"
                     style={{ fontSize: 12 }}
                 >
-                    Aa <span className="dropdown-arrow">▾</span>
+                    <span style={{ pointerEvents: 'none' }}>Aa</span> <span className="dropdown-arrow" style={{ pointerEvents: 'none' }}>▾</span>
                 </button>
-                {showTypeset && (
+                {activePopover === 'typeset' && (
                     <div className="typeset-popover" style={{ position: 'fixed', ...dropPos, zIndex: 9999 }}>
                         <div className="typeset-row">
                             <label>字号</label>
@@ -2131,21 +2154,21 @@ function EditorToolbar({ editor, margins, setMargins }) {
             </div>
 
             {/* 📄 页面边距 */}
-            <div className="toolbar-dropdown-wrap" onClick={e => e.stopPropagation()}>
+            <div className="toolbar-dropdown-wrap">
                 <button
-                    className={`toolbar-btn ${showMargins ? 'active' : ''}`}
-                    onClick={e => { closeAll(); setDropPos(getDropdownPos(e.currentTarget, 'right')); setShowMargins(!showMargins); }}
+                    className={`toolbar-btn ${activePopover === 'margins' ? 'active' : ''}`}
+                    onPointerUp={e => togglePopover(e, 'margins', 'right')}
                     title="页面设置"
                     style={{ fontSize: 12 }}
                 >
-                    📄 <span className="dropdown-arrow">▾</span>
+                    <span style={{ pointerEvents: 'none' }}>📄</span> <span className="dropdown-arrow" style={{ pointerEvents: 'none' }}>▾</span>
                 </button>
-                {showMargins && (
+                {activePopover === 'margins' && (
                     <div className="typeset-popover" style={{ position: 'fixed', ...dropPos, zIndex: 9999 }}>
                         <div className="typeset-row">
                             <label>上下</label>
                             <input
-                                type="range" min="40" max="160" step="8"
+                                type="range" min="0" max="200" step="4"
                                 value={margins.y}
                                 onChange={e => setMargins(prev => ({ ...prev, y: Number(e.target.value) }))}
                             />
@@ -2154,14 +2177,29 @@ function EditorToolbar({ editor, margins, setMargins }) {
                         <div className="typeset-row">
                             <label>左右</label>
                             <input
-                                type="range" min="40" max="160" step="8"
+                                type="range" min="0" max="200" step="4"
                                 value={margins.x}
                                 onChange={e => setMargins(prev => ({ ...prev, x: Number(e.target.value) }))}
                             />
                             <span className="typeset-value">{margins.x}px</span>
                         </div>
-                        <button className="typeset-reset" onClick={() => setMargins({ x: 96, y: 96 })}>
-                            恢复默认
+                        <div className="typeset-row">
+                            <label>宽度</label>
+                            <input
+                                type="range" min="600" max="1400" step="20"
+                                value={maxWidth === 0 ? 1400 : maxWidth}
+                                onChange={e => setMaxWidth(Number(e.target.value))}
+                            />
+                            <span className="typeset-value">{maxWidth === 0 ? '100%' : `${maxWidth}px`}</span>
+                        </div>
+                        <button className="typeset-reset" onClick={() => setMargins({ x: 40, y: 40 })}>
+                            恢复紧凑
+                        </button>
+                        <button className="typeset-reset" style={{ marginTop: 4 }} onClick={() => setMargins({ x: 96, y: 96 })}>
+                            恢复经典 (A4)
+                        </button>
+                        <button className="typeset-reset" style={{ marginTop: 4 }} onClick={() => setMaxWidth(0)}>
+                            全屏宽度
                         </button>
                     </div>
                 )}
