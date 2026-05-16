@@ -1597,6 +1597,18 @@ body.resizing .main-content {
   position: relative;
   z-index: 1;
   width: 100%;
+  /* 修复：解决手机端网页滚动后文字不显示的渲染 Bug */
+  /* 通过强制开启硬件加速和提示浏览器该层会发生变换，触发更频繁的重绘 */
+  transform: translateZ(0);
+  will-change: transform, clip-path;
+}
+
+@media (max-width: 768px) {
+  .pages-fg-layer {
+    /* 在移动端禁用裁切以彻底避免 WebKit 渲染 Bug，移动端通常不需要严格的分页视觉隔离 */
+    clip-path: none !important;
+    -webkit-clip-path: none !important;
+  }
 }
 
 
